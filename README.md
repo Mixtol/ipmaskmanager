@@ -1,5 +1,10 @@
 # IpSearch service
 
+Сервис для хранения и быстрого поиска IP-адресов по подсетям заказчика.
+https://confluence.mts.ru/pages/viewpage.action?pageId=1362735821
+
+Далее будет интегрирован в офенсис как микросервис со свой БД.
+
 ## Описание методов
 
 ### 1. Создание записи (`/add_subnet`)
@@ -55,7 +60,6 @@ DELETE /delete_subnet
 Пример ответа (запись не найдена):
 
 ```json
-Копировать код
 {
   "detail": "Network 192.168.1.0/24 for company Example Corp not found."
 }
