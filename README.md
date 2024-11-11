@@ -103,7 +103,6 @@ DELETE /delete_subnet
 ```
 
 ## Запуск приложения
-Запустите приложение:
 
 ```bash
 uvicorn app:app --reload --host 0.0.0.0 --port 8080

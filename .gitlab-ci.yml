@@ -1,0 +1,29 @@
+
+stages:
+  - build
+  - deploy
+# Сборка Docker-образа
+build:
+  stage: build
+  script:
+    # Сборка образа
+    - docker build -t iphelper:latest .
+  only:
+    - main
+  tags:
+    - 0400socoffens-shell
+# Деплой на локальном хосте
+deploy:
+  stage: deploy
+  script:
+    # Останавливаем старый контейнер (если есть)
+    - docker stop iphelper || true
+    - docker rm iphelper || true
+    # Запускаем новый контейнер
+    - docker run -d --name iphelper -p 30000:8080 iphelper:latest
+    - sleep 5
+    - docker ps
+  only:
+    - main
+  tags:
+    - 0400socoffens-shell
