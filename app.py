@@ -1,11 +1,17 @@
-from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, IPvAnyNetwork, IPvAnyAddress
+from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
 from typing import List, Union, Optional
 import sqlite3
 import ipaddress
 
 # Инициализация FastAPI
 app = FastAPI()
+
+# Подключение папки со статикой
+app.mount("/static", StaticFiles(directory="static"), name='static')
 
 # Создание базы данных SQLite
 DB_FILE = "subnets.db"
@@ -38,6 +44,13 @@ class SearchQuery(BaseModel):
     query: Union[IPvAnyAddress, IPvAnyNetwork, None] = None
     company: Optional[str] = None
 
+
+
+@app.get("/")
+async def serve_index():
+    """Главная страница
+    """
+    return FileResponse("static/index.html")
 
 @app.post("/add_subnet")
 async def add_subnet(subnet: Subnet):

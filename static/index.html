@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPHelper</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f9f9f9;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .form-inline {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .form-inline input, .form-inline button, .form-inline select {
+            padding: 10px;
+            font-size: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .form-inline button {
+            background-color: #007BFF;
+            color: #fff;
+            cursor: pointer;
+            border: none;
+        }
+        .form-inline button:hover {
+            background-color: #0056b3;
+        }
+        .card {
+            background: #fff;
+            padding: 15px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .card h4 {
+            margin: 0;
+        }
+        .card p {
+            margin: 5px 0;
+        }
+        .card button {
+            padding: 5px 10px;
+            background-color: #dc3545;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .card button:hover {
+            background-color: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Subnet Manager</h1>
+        <!-- Compact form -->
+        <form id="add-form" class="form-inline">
+            <input type="text" id="network" name="network" placeholder="Net (192.168.1.0/24)" required>
+            <input type="text" id="company" name="company" placeholder="Tenant" required>
+            <input type="text" id="description" name="description" placeholder="Description (optional)">
+            <button type="submit">Add</button>
+        </form>
+
+        <!-- Filters -->
+        <div class="form-inline">
+            <select id="filter-company">
+                <option value="">All Companies</option>
+            </select>
+            <input type="text" id="filter-network" placeholder="Filter by Network">
+            <button onclick="fetchSubnets()">Search</button>
+        </div>
+
+        <h2>Results</h2>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        async function fetchSubnets() {
+            const company = document.getElementById("filter-company").value;
+            const network = document.getElementById("filter-network").value;
+            const url = `/search_subnet?company=${encodeURIComponent(company)}&network=${encodeURIComponent(network)}`;
+            const response = await fetch(url);
+            const data = await response.json();
+            displayResults(data);
+        }
+
+        async function fetchCompanies() {
+            const url = `/search_subnet`;
+            const response = await fetch(url);
+            const data = await response.json();
+            const companies = [...new Set(data.map(record => record.company))];
+            const select = document.getElementById("filter-company");
+            select.innerHTML = '<option value="">All Companies</option>';
+            companies.forEach(company => {
+                const option = document.createElement("option");
+                option.value = company;
+                option.textContent = company;
+                select.appendChild(option);
+            });
+        }
+
+        function displayResults(data) {
+            const results = document.getElementById("results");
+            results.innerHTML = "";
+            data.forEach(record => {
+                const card = document.createElement("div");
+                card.className = "card";
+                card.innerHTML = `
+                    <h4>${record.network}</h4>
+                    <p>Company: ${record.company}</p>
+                    <p>Description: ${record.description || "No description"}</p>
+                    <button onclick="deleteSubnet(${record.id})">Delete</button>
+                `;
+                results.appendChild(card);
+            });
+        }
+
+        async function addSubnet(event) {
+            event.preventDefault();
+            const formData = new FormData(document.getElementById("add-form"));
+            const response = await fetch("/add_subnet", {
+                method: "POST",
+                body: formData
+            });
+            if (response.ok) {
+                fetchSubnets();
+                fetchCompanies();
+                document.getElementById("add-form").reset();
+            } else {
+                alert("Error adding subnet.");
+            }
+        }
+
+        async function deleteSubnet(id) {
+            const response = await fetch(`/delete/${id}`, { method: "DELETE" });
+            if (response.ok) {
+                fetchSubnets();
+                fetchCompanies();
+            } else {
+                alert("Error deleting subnet.");
+            }
+        }
+
+        document.getElementById("add-form").addEventListener("submit", addSubnet);
+        document.addEventListener("DOMContentLoaded", () => {
+            fetchSubnets();
+            fetchCompanies();
+        });
+    </script>
+</body>
+</html>
