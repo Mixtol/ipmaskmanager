@@ -41,9 +41,8 @@ class Subnet(BaseModel):
 
 # Модель для поиска
 class SearchQuery(BaseModel):
-    query: Union[IPvAnyAddress, IPvAnyNetwork, None] = None
+    query: Optional[str] = None
     company: Optional[str] = None
-
 
 
 @app.get("/")
@@ -52,34 +51,123 @@ async def serve_index():
     """
     return FileResponse("static/index.html")
 
+
 @app.post("/add_subnet")
 async def add_subnet(subnet: Subnet):
     """
-    Добавляет новую подсеть в базу данных.
-    Если подсеть уже существует для той же компании, возвращает ошибку.
+    Добавляет подсеть в базу данных.
+    """
+    try:
+        IPvAnyNetwork(subnet.network)
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO subnets (network, company, description) VALUES (?, ?, ?)",
+                (str(subnet.network), subnet.company, subnet.description),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Subnet already exists for this company.")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid subnet format.")
+    return {"message": "Subnet added successfully."}
+
+
+@app.get("/get_all_subnets")
+async def get_all_subnets():
+    """
+    Возвращает все записи в базе данных.
     """
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT id, network, company, description FROM subnets")
+        rows = cursor.fetchall()
+    return [
+        {"id": row[0], "network": row[1], "company": row[2], "description": row[3]}
+        for row in rows
+    ]
 
-        # Проверяем, существует ли такая комбинация network + company
-        cursor.execute(
-            "SELECT id FROM subnets WHERE network = ? AND company = ?",
-            (str(subnet.network), subnet.company)
-        )
-        if cursor.fetchone():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Network {subnet.network} already exists for company {subnet.company}."
-            )
 
-        # Добавляем новую запись
-        cursor.execute("""
-        INSERT INTO subnets (network, company, description)
-        VALUES (?, ?, ?)
-        """, (str(subnet.network), subnet.company, subnet.description))
-        conn.commit()
+@app.get("/get_companies")
+async def get_companies():
+    """
+    Возвращает список всех уникальных компаний.
+    """
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT company FROM subnets")
+        rows = cursor.fetchall()
+    return [row[0] for row in rows]
+ 
 
-    return {"message": "Subnet added successfully."}
+@app.post("/search_subnet")
+async def search_subnet(query: SearchQuery):
+    """
+    Поиск записей по IP/подсети и/или компании.
+    """
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, network, company, description FROM subnets")
+            rows = cursor.fetchall()
+
+        results = []
+
+        # Если указана только компания
+        if query.company and not query.query:
+            results = [
+                {"id": row[0], "network": row[1], "company": row[2], "description": row[3]}
+                for row in rows if row[2] == query.company
+            ]
+
+        # Если указан только IP/сеть
+        elif query.query and not query.company:
+            try:
+                search_object = ipaddress.ip_network(query.query, strict=False)
+                for row in rows:
+                    db_network = ipaddress.ip_network(row[1])
+                    if search_object.subnet_of(db_network) or db_network.subnet_of(search_object):
+                        results.append({
+                            "id": row[0],
+                            "network": row[1],
+                            "company": row[2],
+                            "description": row[3]
+                        })
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid IP or network format.")
+
+        # Если указаны оба параметра
+        elif query.query and query.company:
+            try:
+                search_object = ipaddress.ip_network(query.query, strict=False)
+                for row in rows:
+                    db_network = ipaddress.ip_network(row[1])
+                    if row[2] == query.company and (
+                        search_object.subnet_of(db_network) or db_network.subnet_of(search_object)
+                    ):
+                        results.append({
+                            "id": row[0],
+                            "network": row[1],
+                            "company": row[2],
+                            "description": row[3]
+                        })
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid IP or network format.")
+
+        # Если ничего не указано
+        else:
+            results = [
+                {"id": row[0], "network": row[1], "company": row[2], "description": row[3]}
+                for row in rows
+            ]
+
+        return results
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+
+
 
 
 @app.delete("/delete_subnet")
@@ -111,44 +199,18 @@ async def delete_subnet(subnet: Subnet):
     return {"message": f"Subnet {subnet.network} for company {subnet.company} deleted successfully."}
 
 
-@app.post("/search_subnet")
-async def search_subnets(query: SearchQuery):
+@app.delete("/delete_subnet_index/{id}")
+async def delete_subnet_index(id: int):
     """
-    Ищет записи по IP-адресу, подсети или компании.
-    Возвращает массив всех совпадений.
+    Удаляет подсеть по ID.
     """
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT network, company, description FROM subnets")
-        rows = cursor.fetchall()
+        cursor.execute("SELECT id FROM subnets WHERE id = ?", (id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail=f"Subnet with ID {id} not found.")
+        cursor.execute("DELETE FROM subnets WHERE id = ?", (id,))
+        conn.commit()
+    return {"message": f"Subnet with ID {id} deleted successfully."}
 
-    matches = []
 
-    # Если передан IP-адрес или подсеть
-    if query.query:
-        search_object = (
-            ipaddress.ip_address(query.query)
-            if isinstance(query.query, (str, ipaddress.IPv4Address, ipaddress.IPv6Address))
-            else ipaddress.ip_network(query.query)
-        )
-
-        for network, company, description in rows:
-            db_network = ipaddress.ip_network(network)
-            # Проверяем, входит ли IP/подсеть в запись БД
-            if (
-                isinstance(search_object, ipaddress.IPv4Address)
-                or isinstance(search_object, ipaddress.IPv6Address)
-            ):
-                if search_object in db_network:
-                    matches.append({"network": network, "company": company, "description": description})
-            elif isinstance(search_object, ipaddress.IPv4Network) or isinstance(search_object, ipaddress.IPv6Network):
-                if search_object.subnet_of(db_network) or db_network.subnet_of(search_object):
-                    matches.append({"network": network, "company": company, "description": description})
-
-    # Если передана компания
-    if query.company:
-        for network, company, description in rows:
-            if company == query.company:
-                matches.append({"network": network, "company": company, "description": description})
-
-    return matches
