@@ -1,15 +1,16 @@
 # Используем базовый образ Python
-FROM python:slim
+#FROM python:slim
+FROM registry.services.mts.ru/docker/python/gcc-pandas:3.11.3-alpine3.17
 
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Подключаем нетфликс
-RUN printf '[global] \n\
-timeout=360 \n\
-trusted-host = nexus.services.mts.ru \n\
-index-url=https://nexus.services.mts.ru/repository/pip/simple/ \n\
-index=https://nexus.services.mts.ru/repository/pip/' > /etc/pip.conf
+# # Подключаем нетфликс
+# RUN printf '[global] \n\
+# timeout=360 \n\
+# trusted-host = nexus.services.mts.ru \n\
+# index-url=https://nexus.services.mts.ru/repository/pip/simple/ \n\
+# index=https://nexus.services.mts.ru/repository/pip/' > /etc/pip.conf
 
 # Устанавливаем зависимости без кэша а то докер ругается
 COPY requirements.txt requirements.txt
