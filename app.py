@@ -1,4 +1,5 @@
 from pydantic import BaseModel, IPvAnyNetwork, IPvAnyAddress
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -12,6 +13,15 @@ app = FastAPI()
 
 # Подключение папки со статикой
 app.mount("/static", StaticFiles(directory="static"), name='static')
+
+#
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
 # Создание базы данных SQLite
 DB_FILE = "subnets.db"
