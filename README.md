@@ -188,11 +188,11 @@ DELETE /delete_subnet_index/5
 0. Инициализируйте базу данных (автоматически при старте).
 1. Запустите приложение с помощью Uvicorn:
    ```bash
-   uvicorn app:app --reload --host 0.0.0.0 --port 8080
+   uvicorn app:app --reload --host 0.0.0.0 --port 8000
    ```
 2. Перейти по адресу:
    ```
-   http://127.0.0.1:8080
+   http://127.0.0.1:8000
    ```
 
 ---

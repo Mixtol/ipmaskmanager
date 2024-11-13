@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir --progress-bar off --no-build-isolation -r requir
 COPY . .
 
 # Указываем порт, который будет слушать приложение
-EXPOSE 8080
+EXPOSE 8000
 
 # Команда для запуска приложения
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
