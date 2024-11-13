@@ -20,7 +20,7 @@ deploy:
     - docker stop iphelper || true
     - docker rm iphelper || true
     # Запускаем новый контейнер
-    - docker run -d --name iphelper -p 30000:8080 iphelper:latest
+    - docker run -d --name iphelper -p 8082:8000 iphelper:latest
     - sleep 5
     - docker ps
   only:
