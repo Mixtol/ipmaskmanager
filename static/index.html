@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IP Search</title>
+    <title>IOC Search</title>
     <link rel="icon" href="/static/favicon.ico">
     <style>
         /* CSS */
@@ -74,11 +74,18 @@
         .card .close-btn:hover {
             background-color: #c82333;
         }
+        .card ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        .card li {
+            margin: 5px 0;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Кнопка "Back to Offenses" -->
+        <!-- Кнопка "Назад" -->
         <button id="back-to-offenses" onclick="history.back()" style="
             background-color: #007BFF;
             color: white;
@@ -88,42 +95,47 @@
             cursor: pointer;
             font-size: 1rem;
             margin-bottom: 20px;">
-            Back to Offenses
+            Назад
         </button>
-        <h1>Customers' IP search</h1>
+        <h1>Поиск IOC</h1>
         <form id="add-form" class="form-inline">
-            <input type="text" id="network" placeholder="Network (e.g., 192.168.1.0/24)" required>
-            <input type="text" id="company" placeholder="Company" required>
-            <input type="text" id="description" placeholder="Description (optional)">
-            <button type="submit">Add</button>
+            <select id="attribute-type" required>
+                <option value="">Выберите тип атрибута</option>
+                <option value="src-ip">src-ip</option>
+                <option value="dst-ip">dst-ip</option>
+                <option value="src-ip|port">src-ip|port</option>
+                <option value="filename">filename</option>
+                <option value="md5">md5</option>
+                <option value="sha1">sha1</option>
+                <option value="sha256">sha256</option>
+                <!-- Добавьте другие типы атрибутов при необходимости -->
+            </select>
+            <input type="text" id="value" placeholder="Значение" required>
+            <input type="text" id="description" placeholder="Описание (необязательно)">
+            <button type="submit">Добавить</button>
         </form>
         <form id="search-form" class="form-inline">
-            <select id="search-company">
-                <option value="">All Companies</option>
+            <select id="search-attribute-type">
+                <option value="">Все типы атрибутов</option>
+                <option value="src-ip">src-ip</option>
+                <option value="dst-ip">dst-ip</option>
+                <option value="src-ip|port">src-ip|port</option>
+                <option value="filename">filename</option>
+                <option value="md5">md5</option>
+                <option value="sha1">sha1</option>
+                <option value="sha256">sha256</option>
+                <!-- Добавьте другие типы атрибутов при необходимости -->
             </select>
-            <input type="text" id="search-query" placeholder="Search by IP or Network">
-            <button type="submit">Search</button>
+            <input type="text" id="search-value" placeholder="Поиск по значению">
+            <button type="submit">Поиск</button>
         </form>
-        <h2>Results</h2>
+        <h2>Результаты</h2>
         <div id="results"></div>
     </div>
 
     <script>
-        async function fetchCompanies() {
-            const response = await fetch("/ip-search/get_companies");
-            const companies = await response.json();
-            const select = document.getElementById("search-company");
-            select.innerHTML = '<option value="">All Companies</option>';
-            companies.forEach(company => {
-                const option = document.createElement("option");
-                option.value = company;
-                option.textContent = company;
-                select.appendChild(option);
-            });
-        }
-
-        async function fetchSubnets() {
-            const response = await fetch("/ip-search/get_all_subnets");
+        async function fetchIOCs() {
+            const response = await fetch("/get_all_iocs");
             const data = await response.json();
             displayResults(data);
         }
@@ -135,76 +147,130 @@
                 const card = document.createElement("div");
                 card.className = "card";
                 card.innerHTML = `
-                    <h4>${record.network}</h4>
-                    <p>Company: ${record.company}</p>
-                    <p>Description: ${record.description || "No description"}</p>
-                    <button class="close-btn" onclick="deleteSubnet(${record.id})">&times;</button>
+                    <h4>${record.attribute_type}: ${record.value}</h4>
+                    <p>Описание: ${record.description || "Нет описания"}</p>
+                    <button class="close-btn" onclick="deleteIOC(${record.id})">&times;</button>
                 `;
                 results.appendChild(card);
             });
         }
 
-        async function searchSubnets(event) {
+        async function searchIOCs(event) {
             event.preventDefault();
-            const company = document.getElementById("search-company").value || null;
-            const query = document.getElementById("search-query").value || null;
-        
+            const attribute_type = document.getElementById("search-attribute-type").value || null;
+            const value = document.getElementById("search-value").value || null;
+
             try {
-                const response = await fetch("/ip-search/search_subnet", {
+                const response = await fetch("/search_ioc", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ company, query }),
+                    body: JSON.stringify({ attribute_type, value }),
                 });
-        
+
                 if (response.ok) {
                     const data = await response.json();
                     displayResults(data);
                 } else {
                     const error = await response.json();
-                    alert(`Error: ${error.detail}`);
+                    alert(`Ошибка: ${error.detail}`);
                 }
             } catch (err) {
-                alert(`Unexpected error: ${err.message}`);
+                alert(`Неожиданная ошибка: ${err.message}`);
             }
         }
-        
 
-        async function addSubnet(event) {
+        async function addIOC(event) {
             event.preventDefault();
-            const network = document.getElementById("network").value.trim();
-            const company = document.getElementById("company").value.trim();
+            const attribute_type = document.getElementById("attribute-type").value;
+            const value = document.getElementById("value").value.trim();
             const description = document.getElementById("description").value.trim();
 
-            const response = await fetch("/ip-search/add_subnet", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ network, company, description }),
-            });
+            try {
+                const response = await fetch("/add_ioc", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ attribute_type, value, description }),
+                });
 
-            if (response.ok) {
-                fetchSubnets();
-                fetchCompanies();
-                document.getElementById("add-form").reset();
-            } else {
-                const error = await response.json();
-                alert(error.detail || "Error adding subnet.");
+                if (response.ok) {
+                    const data = await response.json();
+                    const ioc_id = data.ioc_id;
+                    displaySendingStatus(ioc_id);
+                    document.getElementById("add-form").reset();
+                } else {
+                    const error = await response.json();
+                    alert(error.detail || "Ошибка при добавлении IOC.");
+                }
+            } catch (err) {
+                alert(`Неожиданная ошибка: ${err.message}`);
             }
         }
 
-        async function deleteSubnet(id) {
-            const response = await fetch(`/ip-search/delete_subnet_index/${id}`, { method: "DELETE" });
+        function displaySendingStatus(ioc_id) {
+            const results = document.getElementById("results");
+            const statusCard = document.createElement("div");
+            statusCard.className = "card";
+            statusCard.id = `status-card-${ioc_id}`;
+            statusCard.innerHTML = `
+                <h4>Отправка IOC (ID: ${ioc_id}) в другие сервисы...</h4>
+                <ul id="status-list-${ioc_id}">
+                    <!-- Статусы будут добавлены здесь -->
+                </ul>
+            `;
+            results.prepend(statusCard);
+
+            // Начинаем опрос статусов
+            pollStatus(ioc_id);
+        }
+
+        function pollStatus(ioc_id) {
+            const interval = setInterval(async () => {
+                const response = await fetch(`/ioc_status/${ioc_id}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const statuses = data.statuses;
+                    const statusList = document.getElementById(`status-list-${ioc_id}`);
+                    statusList.innerHTML = "";
+                    let allCompleted = true;
+
+                    statuses.forEach(status => {
+                        const li = document.createElement("li");
+                        const serviceName = status.service_url;
+                        const statusCode = status.status_code;
+
+                        if (statusCode === null) {
+                            li.textContent = `${serviceName}: ожидание...`;
+                            allCompleted = false;
+                        } else if (statusCode >= 200 && statusCode < 300) {
+                            li.textContent = `${serviceName}: Успешно (Статус ${statusCode})`;
+                        } else {
+                            li.textContent = `${serviceName}: Ошибка (Статус ${statusCode})`;
+                        }
+
+                        statusList.appendChild(li);
+                    });
+
+                    // Если все статусы получены, прекращаем опрос
+                    if (statuses.length === 3 && allCompleted) {
+                        clearInterval(interval);
+                    }
+                }
+            }, 1000); // Опрос каждые 1 секунду
+        }
+
+        async function deleteIOC(id) {
+            const response = await fetch(`/delete_ioc_by_id/${id}`, { method: "DELETE" });
             if (response.ok) {
-                fetchSubnets();
+                fetchIOCs();
             } else {
-                alert("Error deleting subnet.");
+                alert("Ошибка при удалении IOC.");
             }
         }
 
-        document.getElementById("add-form").addEventListener("submit", addSubnet);
-        document.getElementById("search-form").addEventListener("submit", searchSubnets);
+        document.getElementById("add-form").addEventListener("submit", addIOC);
+        document.getElementById("search-form").addEventListener("submit", searchIOCs);
         document.addEventListener("DOMContentLoaded", () => {
-            fetchSubnets();
-            fetchCompanies();
+            fetchIOCs();
         });
     </script>
 </body>

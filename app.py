@@ -1,24 +1,23 @@
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, IPvAnyNetwork, Field, field_validator
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from typing import Optional
+from enum import Enum
+from pydantic import BaseModel, Field, model_validator
 
+import aiohttp
 import sqlite3
 import ipaddress
-from typing import List, Union, Optional
-import sqlite3
-import ipaddress
+import re
 
-# Инициализация FastAPI
+# Initialize FastAPI
 app = FastAPI()
 
-# Подключение папки со статикой
+# Mount static files
 app.mount("/static", StaticFiles(directory="static"), name='static')
 
-#
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,239 +26,261 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Создание базы данных SQLite
-DB_FILE = "subnets.db"
+# Database file
+DB_FILE = "iocs.db"
+
 
 def init_db():
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        # Создаем таблицу с уникальным ограничением по network + company
+        # Таблица для IOC
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS subnets (
+        CREATE TABLE IF NOT EXISTS iocs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            network TEXT NOT NULL,
-            company TEXT NOT NULL,
+            attribute_type TEXT NOT NULL,
+            value TEXT NOT NULL,
             description TEXT,
-            UNIQUE(network, company) -- Уникальное ограничение
+            UNIQUE(attribute_type, value)
+        )
+        """)
+        # Таблица для статусов отправки
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ioc_statuses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ioc_id INTEGER NOT NULL,
+            service_url TEXT NOT NULL,
+            status_code INTEGER,
+            FOREIGN KEY(ioc_id) REFERENCES iocs(id)
         )
         """)
         conn.commit()
 
+
 init_db()
 
 
-# Модель для добавления записи
-class Subnet(BaseModel):
-    network: Optional[IPvAnyNetwork] = Field(None, description="The network in CIDR format (e.g., 192.168.1.0/24)")
-    company: str = Field(..., max_length=100, description="The company name")
-    description: Optional[str] = Field(None, max_length=255, description="An optional description of the subnet")
-
-    @field_validator("network", pre=True, always=True)
-    def validate_network(cls, value):
-        if not value:
-            raise ValueError("Network is required and must be in CIDR format (e.g., 192.168.1.0/24)")
-        return value
-
-    @field_validator("company")
-    def validate_company(cls, value):
-        if not value or len(value.strip()) < 3:
-            raise ValueError("Company name must be at least 3 characters long")
-        if len(value) > 64:
-            raise ValueError("Company name must not exceed 64 characters")
-        return value.strip()
-
-    @field_validator("description")
-    def validate_description(cls, value):
-        if value and len(value) > 255:
-            raise ValueError("Description must not exceed 255 characters")
-        return value
-
-# Модель для поиска
-class SearchQuery(BaseModel):
-    query: Optional[str] = None
-    company: Optional[str] = None
-
-
-@app.get("/")
-async def serve_index():
-    """Главная страница
-    """
-    return FileResponse("static/index.html")
-
-
-@app.post("/add_subnet")
-async def add_subnet(data: dict):
-    """Добавляет подсеть в базу данных.
-    Args:
-        data (dict): Подсеть, компания и описание и обьекта Subnet
-    """
-    try:
-        subnet = Subnet(**data)
-        # Проверка формата сети
-        IPvAnyNetwork(subnet.network)
-        # Работа с базой данных
+async def send_ioc_to_service(url, ioc_id, ioc):
+    async with aiohttp.ClientSession() as session:
+        # try:
+        #     async with session.post(url, json=ioc.dict()) as response:
+        #         status = response.status
+        # except Exception as e:
+        #     # Если произошла ошибка, можно установить статус как None или специальное значение
+        #     status = None
+        try:
+            async with session.get('http://127.0.0.1:8000/') as response:
+                status = response.status
+        except Exception as e:
+            # Если произошла ошибка, можно установить статус как None или специальное значение
+            status = None
+        # Сохраняем статус в базе данных
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO subnets (network, company, description) VALUES (?, ?, ?)",
-                (str(subnet.network), subnet.company, subnet.description),
+                "INSERT INTO ioc_statuses (ioc_id, service_url, status_code) VALUES (?, ?, ?)",
+                (ioc_id, url, status)
             )
             conn.commit()
+
+
+# Определение допустимых типов атрибутов
+class AttributeType(str, Enum):
+    src_ip = "src-ip"
+    dst_ip = "dst-ip"
+    src_ip_port = "src-ip|port"
+    filename = "filename"
+    md5 = "md5"
+    sha1 = "sha1"
+    sha256 = "sha256"
+    # Добавьте другие типы по необходимости
+
+# Модель IOC с валидацией
+class IOC(BaseModel):
+    attribute_type: AttributeType = Field(..., description="The type of IOC attribute")
+    value: str = Field(..., description="The value of the attribute")
+    description: Optional[str] = Field(None, max_length=255, description="An optional description of the IOC")
+
+    @model_validator(mode='after')
+    def validate_ioc(cls, model):
+        attribute_type = model.attribute_type
+        value = model.value
+
+        if attribute_type in ["src-ip", "dst-ip"]:
+            try:
+                ipaddress.ip_address(value)
+            except ValueError:
+                raise ValueError("Invalid IP address format")
+        elif attribute_type == "src-ip|port":
+            if '|' not in value:
+                raise ValueError("Value must be in the format 'IP|Port'")
+            ip_part, port_part = value.split('|', 1)
+            try:
+                ipaddress.ip_address(ip_part)
+            except ValueError:
+                raise ValueError("Invalid IP address in 'IP|Port'")
+            if not port_part.isdigit():
+                raise ValueError("Port must be a number")
+        elif attribute_type == "filename":
+            if len(value) > 255:
+                raise ValueError("Filename must not exceed 255 characters")
+            # Дополнительная валидация для имени файла
+        elif attribute_type in ["md5", "sha1", "sha256"]:
+            hash_patterns = {
+                "md5": r'^[a-fA-F0-9]{32}$',
+                "sha1": r'^[a-fA-F0-9]{40}$',
+                "sha256": r'^[a-fA-F0-9]{64}$',
+            }
+            pattern = hash_patterns[attribute_type]
+            if not re.match(pattern, value):
+                raise ValueError(f"Invalid {attribute_type} hash format")
+        else:
+            raise ValueError(f"Unsupported attribute type: {attribute_type}")
+        return model
+
+
+# Model for search queries
+class SearchQuery(BaseModel):
+    attribute_type: Optional[AttributeType] = None
+    value: Optional[str] = None
+
+@app.get("/")
+async def serve_index():
+    """Main page"""
+    return FileResponse("static/index.html")
+
+from fastapi import FastAPI, HTTPException
+from pydantic import ValidationError
+
+
+@app.post("/add_ioc")
+async def add_ioc(data, background_tasks: BackgroundTasks):
+    """Добавляет IOC в базу данных и отправляет его в другие сервисы."""
+    try:
+        ioc = IOC(**data)
+        # Вставка в базу данных
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO iocs (attribute_type, value, description) VALUES (?, ?, ?)",
+                (ioc.attribute_type, ioc.value, ioc.description),
+            )
+            ioc_id = cursor.lastrowid
+            conn.commit()
     except sqlite3.IntegrityError:
-        # Обработка уникального ограничения базы данных
         raise HTTPException(
             status_code=400,
-            detail="Subnet already exists for this company."
+            detail="IOC уже существует."
         )
-    except ValueError:
-        # Обработка некорректного формата сети
+    except ValidationError as e:
         raise HTTPException(
             status_code=400,
-            detail="Invalid subnet format. Please provide a valid IPv4 or IPv6 network."
+            detail=e.errors()
         )
     except Exception as e:
-        # Обработка других исключений
         raise HTTPException(
             status_code=500,
-            detail=f"An unexpected error occurred: {str(e)}"
+            detail=f"Произошла непредвиденная ошибка: {str(e)}"
         )
-    # Успешный ответ
-    return {"message": "Subnet added successfully."}
+    
+    # URLs внешних сервисов
+    service_urls = [
+        "https://service1.example.com/api/add_ioc",
+        "https://service2.example.com/api/add_ioc",
+        "https://service3.example.com/api/add_ioc",
+    ]
+    
+    # Запускаем фоновые задачи
+    for url in service_urls:
+        background_tasks.add_task(send_ioc_to_service, url, ioc_id, ioc)
+    
+    return {"message": "IOC успешно добавлен и отправляется в другие сервисы.", "ioc_id": ioc_id}
 
 
-@app.get("/get_all_subnets")
-async def get_all_subnets():
-    """
-    Возвращает все записи в базе данных.
-    """
+@app.get("/get_all_iocs")
+async def get_all_iocs():
+    """Returns all IOC entries in the database."""
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, network, company, description FROM subnets")
+        cursor.execute("SELECT id, attribute_type, value, description FROM iocs")
         rows = cursor.fetchall()
     return [
-        {"id": row[0], "network": row[1], "company": row[2], "description": row[3]}
+        {"id": row[0], "attribute_type": row[1], "value": row[2], "description": row[3]}
         for row in rows
     ]
 
-
-@app.get("/get_companies")
-async def get_companies():
-    """
-    Возвращает список всех уникальных компаний.
-    """
-    with sqlite3.connect(DB_FILE) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT company FROM subnets")
-        rows = cursor.fetchall()
-    return [row[0] for row in rows]
- 
-
-@app.post("/search_subnet")
-async def search_subnet(query: SearchQuery):
-    """
-    Поиск записей по IP/подсети и/или компании.
-    """
+@app.post("/search_ioc")
+async def search_ioc(query: SearchQuery):
+    """Searches for IOCs based on attribute_type and/or value."""
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, network, company, description FROM subnets")
+            sql_query = "SELECT id, attribute_type, value, description FROM iocs WHERE 1=1"
+            params = []
+            if query.attribute_type:
+                sql_query += " AND attribute_type = ?"
+                params.append(query.attribute_type)
+            if query.value:
+                sql_query += " AND value LIKE ?"
+                params.append(f"%{query.value}%")
+            cursor.execute(sql_query, params)
             rows = cursor.fetchall()
 
-        results = []
-
-        # Если указана только компания
-        if query.company and not query.query:
-            results = [
-                {"id": row[0], "network": row[1], "company": row[2], "description": row[3]}
-                for row in rows if row[2] == query.company
-            ]
-        # Если указан только IP/сеть
-        elif query.query and not query.company:
-            try:
-                search_object = ipaddress.ip_network(query.query, strict=False)
-                for row in rows:
-                    db_network = ipaddress.ip_network(row[1])
-                    if search_object.subnet_of(db_network) or db_network.subnet_of(search_object):
-                        results.append({
-                            "id": row[0],
-                            "network": row[1],
-                            "company": row[2],
-                            "description": row[3]
-                        })
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid IP or network format.")
-        # Если указаны оба параметра
-        elif query.query and query.company:
-            try:
-                search_object = ipaddress.ip_network(query.query, strict=False)
-                for row in rows:
-                    db_network = ipaddress.ip_network(row[1])
-                    if row[2] == query.company and (
-                        search_object.subnet_of(db_network) or db_network.subnet_of(search_object)
-                    ):
-                        results.append({
-                            "id": row[0],
-                            "network": row[1],
-                            "company": row[2],
-                            "description": row[3]
-                        })
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid IP or network format.")
-        # Если ничего не указано
-        else:
-            results = [
-                {"id": row[0], "network": row[1], "company": row[2], "description": row[3]}
-                for row in rows
-            ]
+        results = [
+            {"id": row[0], "attribute_type": row[1], "value": row[2], "description": row[3]}
+            for row in rows
+        ]
         return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-
-
-
-
-@app.delete("/delete_subnet")
-async def delete_subnet(subnet: Subnet):
-    """
-    Удаляет запись по подсети и компании.
-    """
+@app.delete("/delete_ioc")
+async def delete_ioc(ioc: IOC):
+    """Deletes an IOC based on attribute_type and value."""
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-
-        # Проверяем, существует ли такая комбинация network + company
+        # Check if such an IOC exists
         cursor.execute(
-            "SELECT id FROM subnets WHERE network = ? AND company = ?",
-            (str(subnet.network), subnet.company)
+            "SELECT id FROM iocs WHERE attribute_type = ? AND value = ?",
+            (ioc.attribute_type, ioc.value)
         )
         if not cursor.fetchone():
             raise HTTPException(
                 status_code=404,
-                detail=f"Network {subnet.network} for company {subnet.company} not found."
+                detail=f"IOC with type {ioc.attribute_type} and value {ioc.value} not found."
             )
-
-        # Удаляем запись
+        # Delete the IOC
         cursor.execute(
-            "DELETE FROM subnets WHERE network = ? AND company = ?",
-            (str(subnet.network), subnet.company)
+            "DELETE FROM iocs WHERE attribute_type = ? AND value = ?",
+            (ioc.attribute_type, ioc.value)
         )
         conn.commit()
+    return {"message": f"IOC with type {ioc.attribute_type} and value {ioc.value} deleted successfully."}
 
-    return {"message": f"Subnet {subnet.network} for company {subnet.company} deleted successfully."}
-
-
-@app.delete("/delete_subnet_index/{id}")
-async def delete_subnet_index(id: int):
-    """
-    Удаляет подсеть по ID.
-    """
+@app.delete("/delete_ioc_by_id/{id}")
+async def delete_ioc_by_id(id: int):
+    """Deletes an IOC by ID."""
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM subnets WHERE id = ?", (id,))
+        cursor.execute("SELECT id FROM iocs WHERE id = ?", (id,))
         if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail=f"Subnet with ID {id} not found.")
-        cursor.execute("DELETE FROM subnets WHERE id = ?", (id,))
+            raise HTTPException(status_code=404, detail=f"IOC with ID {id} not found.")
+        cursor.execute("DELETE FROM iocs WHERE id = ?", (id,))
         conn.commit()
-    return {"message": f"Subnet with ID {id} deleted successfully."}
+    return {"message": f"IOC with ID {id} deleted successfully."}
 
 
+@app.get("/ioc_status/{ioc_id}")
+async def get_ioc_status(ioc_id: int):
+    """Возвращает статусы отправки IOC в другие сервисы."""
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT service_url, status_code FROM ioc_statuses WHERE ioc_id = ?",
+            (ioc_id,)
+        )
+        rows = cursor.fetchall()
+    statuses = [
+        {"service_url": row[0], "status_code": row[1]}
+        for row in rows
+    ]
+    return {"ioc_id": ioc_id, "statuses": statuses}
