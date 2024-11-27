@@ -1,9 +1,13 @@
-from pydantic import BaseModel, IPvAnyNetwork, IPvAnyAddress
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, IPvAnyNetwork, Field, field_validator
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from typing import Optional
 
+import sqlite3
+import ipaddress
 from typing import List, Union, Optional
 import sqlite3
 import ipaddress
@@ -43,11 +47,32 @@ def init_db():
 
 init_db()
 
+
 # Модель для добавления записи
 class Subnet(BaseModel):
-    network: IPvAnyNetwork
-    company: str
-    description: Optional[str] = None
+    network: Optional[IPvAnyNetwork] = Field(None, description="The network in CIDR format (e.g., 192.168.1.0/24)")
+    company: str = Field(..., max_length=100, description="The company name")
+    description: Optional[str] = Field(None, max_length=255, description="An optional description of the subnet")
+
+    @field_validator("network", pre=True, always=True)
+    def validate_network(cls, value):
+        if not value:
+            raise ValueError("Network is required and must be in CIDR format (e.g., 192.168.1.0/24)")
+        return value
+
+    @field_validator("company")
+    def validate_company(cls, value):
+        if not value or len(value.strip()) < 3:
+            raise ValueError("Company name must be at least 3 characters long")
+        if len(value) > 64:
+            raise ValueError("Company name must not exceed 64 characters")
+        return value.strip()
+
+    @field_validator("description")
+    def validate_description(cls, value):
+        if value and len(value) > 255:
+            raise ValueError("Description must not exceed 255 characters")
+        return value
 
 # Модель для поиска
 class SearchQuery(BaseModel):
@@ -63,12 +88,16 @@ async def serve_index():
 
 
 @app.post("/add_subnet")
-async def add_subnet(subnet: Subnet):
-    """
-    Добавляет подсеть в базу данных.
+async def add_subnet(data: dict):
+    """Добавляет подсеть в базу данных.
+    Args:
+        data (dict): Подсеть, компания и описание и обьекта Subnet
     """
     try:
+        subnet = Subnet(**data)
+        # Проверка формата сети
         IPvAnyNetwork(subnet.network)
+        # Работа с базой данных
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -77,9 +106,24 @@ async def add_subnet(subnet: Subnet):
             )
             conn.commit()
     except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="Subnet already exists for this company.")
+        # Обработка уникального ограничения базы данных
+        raise HTTPException(
+            status_code=400,
+            detail="Subnet already exists for this company."
+        )
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid subnet format.")
+        # Обработка некорректного формата сети
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid subnet format. Please provide a valid IPv4 or IPv6 network."
+        )
+    except Exception as e:
+        # Обработка других исключений
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
+    # Успешный ответ
     return {"message": "Subnet added successfully."}
 
 
@@ -129,7 +173,6 @@ async def search_subnet(query: SearchQuery):
                 {"id": row[0], "network": row[1], "company": row[2], "description": row[3]}
                 for row in rows if row[2] == query.company
             ]
-
         # Если указан только IP/сеть
         elif query.query and not query.company:
             try:
@@ -145,7 +188,6 @@ async def search_subnet(query: SearchQuery):
                         })
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid IP or network format.")
-
         # Если указаны оба параметра
         elif query.query and query.company:
             try:
@@ -163,16 +205,13 @@ async def search_subnet(query: SearchQuery):
                         })
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid IP or network format.")
-
         # Если ничего не указано
         else:
             results = [
                 {"id": row[0], "network": row[1], "company": row[2], "description": row[3]}
                 for row in rows
             ]
-
         return results
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 

@@ -78,6 +78,18 @@
 </head>
 <body>
     <div class="container">
+        <!-- Кнопка "Back to Offenses" -->
+        <button id="back-to-offenses" onclick="history.back()" style="
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin-bottom: 20px;">
+            Back to Offenses
+        </button>
         <h1>Customers' IP search</h1>
         <form id="add-form" class="form-inline">
             <input type="text" id="network" placeholder="Network (e.g., 192.168.1.0/24)" required>
@@ -98,7 +110,7 @@
 
     <script>
         async function fetchCompanies() {
-            const response = await fetch("/get_companies");
+            const response = await fetch("/ip-search/get_companies");
             const companies = await response.json();
             const select = document.getElementById("search-company");
             select.innerHTML = '<option value="">All Companies</option>';
@@ -111,7 +123,7 @@
         }
 
         async function fetchSubnets() {
-            const response = await fetch("/get_all_subnets");
+            const response = await fetch("/ip-search/get_all_subnets");
             const data = await response.json();
             displayResults(data);
         }
@@ -138,7 +150,7 @@
             const query = document.getElementById("search-query").value || null;
         
             try {
-                const response = await fetch("/search_subnet", {
+                const response = await fetch("/ip-search/search_subnet", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ company, query }),
@@ -159,11 +171,11 @@
 
         async function addSubnet(event) {
             event.preventDefault();
-            const network = document.getElementById("network").value;
-            const company = document.getElementById("company").value;
-            const description = document.getElementById("description").value;
+            const network = document.getElementById("network").value.trim();
+            const company = document.getElementById("company").value.trim();
+            const description = document.getElementById("description").value.trim();
 
-            const response = await fetch("/add_subnet", {
+            const response = await fetch("/ip-search/add_subnet", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ network, company, description }),
@@ -180,7 +192,7 @@
         }
 
         async function deleteSubnet(id) {
-            const response = await fetch(`/delete_subnet_index/${id}`, { method: "DELETE" });
+            const response = await fetch(`/ip-search/delete_subnet_index/${id}`, { method: "DELETE" });
             if (response.ok) {
                 fetchSubnets();
             } else {
