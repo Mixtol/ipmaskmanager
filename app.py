@@ -143,8 +143,8 @@ services = [
         "data": {
             "url": "https://0400kumcore01.pv.mts.ru",
             "token": os.environ.get('KUMA_MAIN', None),
-            "FQDN": "35ef03b2-5824-4120-ab36-ae961cdb851e",
-            "src-ip": "35ef03b2-5824-4120-ab36-ae961cdb851e"
+            "FQDN":"c3677a36-3dd4-440e-b574-1f872f73258b",
+            "src-ip":"fb4ff0fa-1c35-4db0-a86f-f6b34857d4e3"
         }
     },
     {
@@ -153,8 +153,8 @@ services = [
         "data": {
             "url": "https://0400arc-esm-mb01.pv.mts.ru",
             "token": os.environ.get('ARC_TOKEN', None),
-            "FQDN": "HCInfb5MBABCAJYwYVXf%2BMg%3D%3D",
-            # Добавьте другие соответствия при необходимости
+            "FQDN":"Hvu-5sIwBABDGoBZZHVhMTA%3D%3D",
+            "src-ip":"HRh56KosBABD2lRvZadoKag%3D%3D"
         }
     },
     # Добавьте другие сервисы при необходимости
@@ -177,7 +177,7 @@ async def send_ioc_to_kuma(data: dict, ioc_id: int, ioc: IOC):
             dictionary_id,
             ioc.value,
             {"value": ioc.description})
-        status_code = 200  # Предполагаем успешное выполнение
+        status_code = status  # Предполагаем успешное выполнение
         error_message = None
     except Exception as e:
         status_code = None
@@ -202,7 +202,7 @@ async def send_ioc_to_arcsight(data: dict, ioc_id: int, ioc: IOC):
             list_id,
             [ioc.attribute_type, 'Comments'],
             [ioc.value, ioc.description])
-        status_code = 200
+        status_code = status
         error_message = None
     except Exception as e:
         status_code = None
