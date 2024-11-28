@@ -1,6 +1,5 @@
 __pycache__/
 .venv/
-
-subnets.db
+*.db
 Dockerfile
 .env

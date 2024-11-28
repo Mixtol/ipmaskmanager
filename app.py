@@ -5,11 +5,42 @@ from fastapi.responses import FileResponse
 from typing import Optional
 from enum import Enum
 from pydantic import BaseModel, Field, model_validator
-
-import aiohttp
+from pydantic import ValidationError
 import sqlite3
 import ipaddress
 import re
+import os
+
+from modules.arcsight_api import ArcSightAPI
+from modules.kuma_api import KumaRestAPIv2
+
+### Пиздец местного разлива
+main_core = {
+    "url": "https://0400kumcore01.pv.mts.ru",
+    "token": os.environ.get('KUMA_MAIN', None),
+    # "FQDN":"c3677a36-3dd4-440e-b574-1f872f73258b",
+    # "src-ip":"fb4ff0fa-1c35-4db0-a86f-f6b34857d4e3"
+    "FQDN":"35ef03b2-5824-4120-ab36-ae961cdb851e",
+    "src-ip":"35ef03b2-5824-4120-ab36-ae961cdb851e"
+}
+mts_bank = {
+    "url": "https://0001kumcore01.msk.mts.ru",
+    "token": os.environ.get('KUMA_PAO', None),
+    "FQDN":"a4db230f-e2ea-48e4-b8cd-c0b721d21d04",
+    "src-ip":"da86140c-0b22-4338-aa24-ba3640b5cf7c"
+}
+arc_sight = {
+    "url": "https://0400arc-esm-mb01.pv.mts.ru",
+    "token": os.environ.get('ARC_TOKEN', None),
+    #"FQDN":"Hvu-5sIwBABDGoBZZHVhMTA%3D%3D",
+    #"src-ip":"HRh56KosBABD2lRvZadoKag%3D%3D"
+    "FQDN":"HCInfb5MBABCAJYwYVXf%2BMg%3D%3D",
+}
+misp = {
+    "url": "https://0400socti01.pv.mts.ru",
+    "token": os.environ.get('MISP_TOKEN', None),
+} 
+####
 
 # Initialize FastAPI
 app = FastAPI()
@@ -58,40 +89,17 @@ def init_db():
 
 init_db()
 
-
-async def send_ioc_to_service(url, ioc_id, ioc):
-    async with aiohttp.ClientSession() as session:
-        # try:
-        #     async with session.post(url, json=ioc.dict()) as response:
-        #         status = response.status
-        # except Exception as e:
-        #     # Если произошла ошибка, можно установить статус как None или специальное значение
-        #     status = None
-        try:
-            async with session.get('http://127.0.0.1:8000/') as response:
-                status = response.status
-        except Exception as e:
-            # Если произошла ошибка, можно установить статус как None или специальное значение
-            status = None
-        # Сохраняем статус в базе данных
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO ioc_statuses (ioc_id, service_url, status_code) VALUES (?, ?, ?)",
-                (ioc_id, url, status)
-            )
-            conn.commit()
-
-
 # Определение допустимых типов атрибутов
 class AttributeType(str, Enum):
     src_ip = "src-ip"
     dst_ip = "dst-ip"
     src_ip_port = "src-ip|port"
+    dst_ip_port = "dst-ip|port"
     filename = "filename"
     md5 = "md5"
     sha1 = "sha1"
     sha256 = "sha256"
+    FQDN = "FQDN"
     # Добавьте другие типы по необходимости
 
 # Модель IOC с валидацией
@@ -110,7 +118,7 @@ class IOC(BaseModel):
                 ipaddress.ip_address(value)
             except ValueError:
                 raise ValueError("Invalid IP address format")
-        elif attribute_type == "src-ip|port":
+        elif attribute_type in ["src-ip|port","dst-ip|port"]:
             if '|' not in value:
                 raise ValueError("Value must be in the format 'IP|Port'")
             ip_part, port_part = value.split('|', 1)
@@ -120,6 +128,9 @@ class IOC(BaseModel):
                 raise ValueError("Invalid IP address in 'IP|Port'")
             if not port_part.isdigit():
                 raise ValueError("Port must be a number")
+        elif attribute_type == "FQDN":
+            if '.' not in value:
+                raise ValueError("Bad FQDN")
         elif attribute_type == "filename":
             if len(value) > 255:
                 raise ValueError("Filename must not exceed 255 characters")
@@ -142,18 +153,67 @@ class IOC(BaseModel):
 class SearchQuery(BaseModel):
     attribute_type: Optional[AttributeType] = None
     value: Optional[str] = None
+    
+    
+async def send_ioc_to_kuma(data:dict, ioc_id, ioc:IOC):
+    #async with aiohttp.ClientSession() as session:
+        # try:
+        #     async with session.post(url, json=ioc.dict()) as response:
+        #         status = response.status
+        # except Exception as e:
+        #     # Если произошла ошибка, можно установить статус как None или специальное значение
+        #     status = None
+        try:
+            kapi = KumaRestAPIv2(data['url'], data['token'])
+            status, response = kapi.add_dictionary_row(
+                data[ioc.attribute_type],
+                ioc.value,
+                {"value":ioc.description})
+            # async with session.post('http://127.0.0.1:8000/') as response:
+            #     status = response.status
+        except Exception as e:
+            # Если произошла ошибка, можно установить статус как None или специальное значение
+            status = e
+        # Сохраняем статус в базе данных
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO ioc_statuses (ioc_id, service_url, status_code) VALUES (?, ?, ?)",
+                (ioc_id, data['url'], status)
+            )
+            conn.commit()
+
+async def send_ioc_to_arcsight(data:dict, ioc_id, ioc:IOC):
+    #async with aiohttp.ClientSession() as session:
+        try:
+            aapi = ArcSightAPI(data['url'], data['token'])
+            status, response = aapi.add_list_row(
+                data[ioc.attribute_type],
+                [ioc.attribute_type, 'Comments'],
+                [ioc.value, ioc.description])
+            # async with session.post(url, json=ioc.dict()) as response:
+            #     status = response.status
+        except Exception as e:
+            # Если произошла ошибка, можно установить статус как None или специальное значение
+            status = None
+        # Сохраняем статус в базе данных
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO ioc_statuses (ioc_id, service_url, status_code) VALUES (?, ?, ?)",
+                (ioc_id, data['url'], status)
+            )
+            conn.commit()
+
 
 @app.get("/")
 async def serve_index():
     """Main page"""
     return FileResponse("static/index.html")
 
-from fastapi import FastAPI, HTTPException
-from pydantic import ValidationError
-
 
 @app.post("/add_ioc")
-async def add_ioc(data, background_tasks: BackgroundTasks):
+async def add_ioc(data:dict, background_tasks: BackgroundTasks):
     """Добавляет IOC в базу данных и отправляет его в другие сервисы."""
     try:
         ioc = IOC(**data)
@@ -182,17 +242,22 @@ async def add_ioc(data, background_tasks: BackgroundTasks):
             detail=f"Произошла непредвиденная ошибка: {str(e)}"
         )
     
-    # URLs внешних сервисов
-    service_urls = [
-        "https://service1.example.com/api/add_ioc",
-        "https://service2.example.com/api/add_ioc",
-        "https://service3.example.com/api/add_ioc",
-    ]
-    
     # Запускаем фоновые задачи
-    for url in service_urls:
-        background_tasks.add_task(send_ioc_to_service, url, ioc_id, ioc)
-    
+    background_tasks.add_task(
+        send_ioc_to_kuma,
+        mts_bank,
+        ioc_id,
+        ioc)
+    # background_tasks.add_task(
+    #     send_ioc_to_kuma,
+    #     main_core,
+    #     ioc_id,
+    #     ioc)
+    background_tasks.add_task(
+        send_ioc_to_arcsight,
+        arc_sight,
+        ioc_id,
+        ioc)
     return {"message": "IOC успешно добавлен и отправляется в другие сервисы.", "ioc_id": ioc_id}
 
 
