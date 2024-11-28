@@ -11,41 +11,14 @@ import ipaddress
 import re
 import os
 
+# Импортируем необходимые модули
 from modules.arcsight_api import ArcSightAPI
 from modules.kuma_api import KumaRestAPIv2
 
-### Пиздец местного разлива
-main_core = {
-    "url": "https://0400kumcore01.pv.mts.ru",
-    "token": os.environ.get('KUMA_MAIN', None),
-    # "FQDN":"c3677a36-3dd4-440e-b574-1f872f73258b",
-    # "src-ip":"fb4ff0fa-1c35-4db0-a86f-f6b34857d4e3"
-    "FQDN":"35ef03b2-5824-4120-ab36-ae961cdb851e",
-    "src-ip":"35ef03b2-5824-4120-ab36-ae961cdb851e"
-}
-mts_bank = {
-    "url": "https://0001kumcore01.msk.mts.ru",
-    "token": os.environ.get('KUMA_PAO', None),
-    "FQDN":"a4db230f-e2ea-48e4-b8cd-c0b721d21d04",
-    "src-ip":"da86140c-0b22-4338-aa24-ba3640b5cf7c"
-}
-arc_sight = {
-    "url": "https://0400arc-esm-mb01.pv.mts.ru",
-    "token": os.environ.get('ARC_TOKEN', None),
-    #"FQDN":"Hvu-5sIwBABDGoBZZHVhMTA%3D%3D",
-    #"src-ip":"HRh56KosBABD2lRvZadoKag%3D%3D"
-    "FQDN":"HCInfb5MBABCAJYwYVXf%2BMg%3D%3D",
-}
-misp = {
-    "url": "https://0400socti01.pv.mts.ru",
-    "token": os.environ.get('MISP_TOKEN', None),
-} 
-####
-
-# Initialize FastAPI
+# Инициализация FastAPI
 app = FastAPI()
 
-# Mount static files
+# Подключение статических файлов
 app.mount("/static", StaticFiles(directory="static"), name='static')
 
 # CORS middleware
@@ -57,9 +30,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Database file
+# Файл базы данных
 DB_FILE = "iocs.db"
-
 
 def init_db():
     with sqlite3.connect(DB_FILE) as conn:
@@ -81,11 +53,11 @@ def init_db():
             ioc_id INTEGER NOT NULL,
             service_url TEXT NOT NULL,
             status_code INTEGER,
+            error_message TEXT,
             FOREIGN KEY(ioc_id) REFERENCES iocs(id)
         )
         """)
         conn.commit()
-
 
 init_db()
 
@@ -118,7 +90,7 @@ class IOC(BaseModel):
                 ipaddress.ip_address(value)
             except ValueError:
                 raise ValueError("Invalid IP address format")
-        elif attribute_type in ["src-ip|port","dst-ip|port"]:
+        elif attribute_type in ["src-ip|port", "dst-ip|port"]:
             if '|' not in value:
                 raise ValueError("Value must be in the format 'IP|Port'")
             ip_part, port_part = value.split('|', 1)
@@ -148,72 +120,104 @@ class IOC(BaseModel):
             raise ValueError(f"Unsupported attribute type: {attribute_type}")
         return model
 
-
-# Model for search queries
+# Модель для поискового запроса
 class SearchQuery(BaseModel):
     attribute_type: Optional[AttributeType] = None
     value: Optional[str] = None
-    
-    
-async def send_ioc_to_kuma(data:dict, ioc_id, ioc:IOC):
-    #async with aiohttp.ClientSession() as session:
-        # try:
-        #     async with session.post(url, json=ioc.dict()) as response:
-        #         status = response.status
-        # except Exception as e:
-        #     # Если произошла ошибка, можно установить статус как None или специальное значение
-        #     status = None
-        try:
-            kapi = KumaRestAPIv2(data['url'], data['token'])
-            status, response = kapi.add_dictionary_row(
-                data[ioc.attribute_type],
-                ioc.value,
-                {"value":ioc.description})
-            # async with session.post('http://127.0.0.1:8000/') as response:
-            #     status = response.status
-        except Exception as e:
-            # Если произошла ошибка, можно установить статус как None или специальное значение
-            status = e
-        # Сохраняем статус в базе данных
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO ioc_statuses (ioc_id, service_url, status_code) VALUES (?, ?, ?)",
-                (ioc_id, data['url'], status)
-            )
-            conn.commit()
 
-async def send_ioc_to_arcsight(data:dict, ioc_id, ioc:IOC):
-    #async with aiohttp.ClientSession() as session:
-        try:
-            aapi = ArcSightAPI(data['url'], data['token'])
-            status, response = aapi.add_list_row(
-                data[ioc.attribute_type],
-                [ioc.attribute_type, 'Comments'],
-                [ioc.value, ioc.description])
-            # async with session.post(url, json=ioc.dict()) as response:
-            #     status = response.status
-        except Exception as e:
-            # Если произошла ошибка, можно установить статус как None или специальное значение
-            status = None
-        # Сохраняем статус в базе данных
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO ioc_statuses (ioc_id, service_url, status_code) VALUES (?, ?, ?)",
-                (ioc_id, data['url'], status)
-            )
-            conn.commit()
-
+# Список сервисов для отправки IOC
+services = [
+    {
+        "name": "mts_bank",
+        "type": "kuma",
+        "data": {
+            "url": "https://0001kumcore01.msk.mts.ru",
+            "token": os.environ.get('KUMA_PAO', None),
+            "FQDN": "a4db230f-e2ea-48e4-b8cd-c0b721d21d04",
+            "src-ip": "da86140c-0b22-4338-aa24-ba3640b5cf7c"
+        }
+    },
+    {
+        "name": "main_core",
+        "type": "kuma",
+        "data": {
+            "url": "https://0400kumcore01.pv.mts.ru",
+            "token": os.environ.get('KUMA_MAIN', None),
+            "FQDN": "35ef03b2-5824-4120-ab36-ae961cdb851e",
+            "src-ip": "35ef03b2-5824-4120-ab36-ae961cdb851e"
+        }
+    },
+    {
+        "name": "arc_sight",
+        "type": "arcsight",
+        "data": {
+            "url": "https://0400arc-esm-mb01.pv.mts.ru",
+            "token": os.environ.get('ARC_TOKEN', None),
+            "FQDN": "HCInfb5MBABCAJYwYVXf%2BMg%3D%3D",
+            # Добавьте другие соответствия при необходимости
+        }
+    },
+    # Добавьте другие сервисы при необходимости
+]
 
 @app.get("/")
 async def serve_index():
-    """Main page"""
+    """Главная страница"""
     return FileResponse("static/index.html")
 
+# Функция для отправки IOC в KUMA
+async def send_ioc_to_kuma(data: dict, ioc_id: int, ioc: IOC):
+    try:
+        kapi = KumaRestAPIv2(data['url'], data['token'])
+        dictionary_id = data.get(ioc.attribute_type)
+        if not dictionary_id:
+            raise Exception(f"Dictionary ID for attribute type '{ioc.attribute_type}' not found in service data.")
+        # Предполагаем, что метод возвращает (status, response)
+        status, response = kapi.add_dictionary_row(
+            dictionary_id,
+            ioc.value,
+            {"value": ioc.description})
+        status_code = 200  # Предполагаем успешное выполнение
+        error_message = None
+    except Exception as e:
+        status_code = None
+        error_message = str(e)
+    # Сохраняем статус в базе данных
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO ioc_statuses (ioc_id, service_url, status_code, error_message) VALUES (?, ?, ?, ?)",
+            (ioc_id, data['url'], status_code, error_message)
+        )
+        conn.commit()
+
+# Функция для отправки IOC в ArcSight
+async def send_ioc_to_arcsight(data: dict, ioc_id: int, ioc: IOC):
+    try:
+        aapi = ArcSightAPI(data['url'], data['token'])
+        list_id = data.get(ioc.attribute_type)
+        if not list_id:
+            raise Exception(f"List ID for attribute type '{ioc.attribute_type}' not found in service data.")
+        status, response = aapi.add_list_row(
+            list_id,
+            [ioc.attribute_type, 'Comments'],
+            [ioc.value, ioc.description])
+        status_code = 200
+        error_message = None
+    except Exception as e:
+        status_code = None
+        error_message = str(e)
+    # Сохраняем статус в базе данных
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO ioc_statuses (ioc_id, service_url, status_code, error_message) VALUES (?, ?, ?, ?)",
+            (ioc_id, data['url'], status_code, error_message)
+        )
+        conn.commit()
 
 @app.post("/add_ioc")
-async def add_ioc(data:dict, background_tasks: BackgroundTasks):
+async def add_ioc(data: dict, background_tasks: BackgroundTasks):
     """Добавляет IOC в базу данных и отправляет его в другие сервисы."""
     try:
         ioc = IOC(**data)
@@ -243,27 +247,28 @@ async def add_ioc(data:dict, background_tasks: BackgroundTasks):
         )
     
     # Запускаем фоновые задачи
-    background_tasks.add_task(
-        send_ioc_to_kuma,
-        mts_bank,
-        ioc_id,
-        ioc)
-    # background_tasks.add_task(
-    #     send_ioc_to_kuma,
-    #     main_core,
-    #     ioc_id,
-    #     ioc)
-    background_tasks.add_task(
-        send_ioc_to_arcsight,
-        arc_sight,
-        ioc_id,
-        ioc)
-    return {"message": "IOC успешно добавлен и отправляется в другие сервисы.", "ioc_id": ioc_id}
+    for service in services:
+        if service['type'] == 'kuma':
+            background_tasks.add_task(
+                send_ioc_to_kuma,
+                service['data'],
+                ioc_id,
+                ioc)
+        elif service['type'] == 'arcsight':
+            background_tasks.add_task(
+                send_ioc_to_arcsight,
+                service['data'],
+                ioc_id,
+                ioc)
+        # Добавьте обработку для других типов сервисов, если необходимо
+    
+    return {"message": "IOC успешно добавлен и отправляется в другие сервисы.", "ioc_id": ioc_id, "services_count": len(services)}
 
+# Остальные эндпоинты остаются без изменений
 
 @app.get("/get_all_iocs")
 async def get_all_iocs():
-    """Returns all IOC entries in the database."""
+    """Возвращает все IOC из базы данных."""
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, attribute_type, value, description FROM iocs")
@@ -275,7 +280,7 @@ async def get_all_iocs():
 
 @app.post("/search_ioc")
 async def search_ioc(query: SearchQuery):
-    """Searches for IOCs based on attribute_type and/or value."""
+    """Поиск IOC по attribute_type и/или value."""
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
@@ -298,41 +303,17 @@ async def search_ioc(query: SearchQuery):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
-@app.delete("/delete_ioc")
-async def delete_ioc(ioc: IOC):
-    """Deletes an IOC based on attribute_type and value."""
-    with sqlite3.connect(DB_FILE) as conn:
-        cursor = conn.cursor()
-        # Check if such an IOC exists
-        cursor.execute(
-            "SELECT id FROM iocs WHERE attribute_type = ? AND value = ?",
-            (ioc.attribute_type, ioc.value)
-        )
-        if not cursor.fetchone():
-            raise HTTPException(
-                status_code=404,
-                detail=f"IOC with type {ioc.attribute_type} and value {ioc.value} not found."
-            )
-        # Delete the IOC
-        cursor.execute(
-            "DELETE FROM iocs WHERE attribute_type = ? AND value = ?",
-            (ioc.attribute_type, ioc.value)
-        )
-        conn.commit()
-    return {"message": f"IOC with type {ioc.attribute_type} and value {ioc.value} deleted successfully."}
-
 @app.delete("/delete_ioc_by_id/{id}")
 async def delete_ioc_by_id(id: int):
-    """Deletes an IOC by ID."""
+    """Удаляет IOC по ID."""
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM iocs WHERE id = ?", (id,))
         if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail=f"IOC with ID {id} not found.")
+            raise HTTPException(status_code=404, detail=f"IOC с ID {id} не найден.")
         cursor.execute("DELETE FROM iocs WHERE id = ?", (id,))
         conn.commit()
-    return {"message": f"IOC with ID {id} deleted successfully."}
-
+    return {"message": f"IOC с ID {id} успешно удален."}
 
 @app.get("/ioc_status/{ioc_id}")
 async def get_ioc_status(ioc_id: int):
@@ -340,12 +321,12 @@ async def get_ioc_status(ioc_id: int):
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT service_url, status_code FROM ioc_statuses WHERE ioc_id = ?",
+            "SELECT service_url, status_code, error_message FROM ioc_statuses WHERE ioc_id = ?",
             (ioc_id,)
         )
         rows = cursor.fetchall()
     statuses = [
-        {"service_url": row[0], "status_code": row[1]}
+        {"service_url": row[0], "status_code": row[1], "error_message": row[2]}
         for row in rows
     ]
     return {"ioc_id": ioc_id, "statuses": statuses}

@@ -199,7 +199,8 @@
                 if (response.ok) {
                     const data = await response.json();
                     const ioc_id = data.ioc_id;
-                    displaySendingStatus(ioc_id);
+                    const servicesCount = data.services_count;
+                    displaySendingStatus(ioc_id, servicesCount);
                     document.getElementById("add-form").reset();
                 } else {
                     const error = await response.json();
@@ -210,7 +211,7 @@
             }
         }
 
-        function displaySendingStatus(ioc_id) {
+        function displaySendingStatus(ioc_id, servicesCount) {
             const results = document.getElementById("results");
             const statusCard = document.createElement("div");
             statusCard.className = "card";
@@ -224,10 +225,10 @@
             results.prepend(statusCard);
 
             // Начинаем опрос статусов
-            pollStatus(ioc_id);
+            pollStatus(ioc_id, servicesCount);
         }
 
-        function pollStatus(ioc_id) {
+        function pollStatus(ioc_id, servicesCount) {
             const interval = setInterval(async () => {
                 const response = await fetch(`/ioc_status/${ioc_id}`);
                 if (response.ok) {
@@ -235,27 +236,26 @@
                     const statuses = data.statuses;
                     const statusList = document.getElementById(`status-list-${ioc_id}`);
                     statusList.innerHTML = "";
-                    let allCompleted = true;
 
                     statuses.forEach(status => {
                         const li = document.createElement("li");
                         const serviceName = status.service_url;
                         const statusCode = status.status_code;
+                        const errorMessage = status.error_message;
 
                         if (statusCode === null) {
-                            li.textContent = `${serviceName}: ожидание...`;
-                            allCompleted = false;
+                            li.textContent = `${serviceName}: Ошибка - ${errorMessage || "Неизвестная ошибка"}`;
                         } else if (statusCode >= 200 && statusCode < 300) {
                             li.textContent = `${serviceName}: Успешно (Статус ${statusCode})`;
                         } else {
-                            li.textContent = `${serviceName}: Ошибка (Статус ${statusCode})`;
+                            li.textContent = `${serviceName}: Ошибка (Статус ${statusCode}) - ${errorMessage || ""}`;
                         }
 
                         statusList.appendChild(li);
                     });
 
                     // Если все статусы получены, прекращаем опрос
-                    if (statuses.length === 3 && allCompleted) {
+                    if (statuses.length === servicesCount) {
                         clearInterval(interval);
                     }
                 }
